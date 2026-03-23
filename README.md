@@ -137,6 +137,46 @@ docker compose up
 
 ---
 
+### Выравнивание (deskew) и RussianDocsOCR
+
+Пайплайн (`app/pipeline.py`) может оценивать наклон **до** полного OCR: OpenCV (projection/contour) + геометрия **RussianDocsOCR** (сегментация документа и боксы полей).
+
+Полезные переменные окружения:
+
+| Переменная | Значение по умолчанию | Смысл |
+|------------|------------------------|--------|
+| `DESKEW_USE_RUS_DOCS_FIELDS` | `1` | Включить пробу угла через RussianDocsOCR |
+| `DESKEW_RUSDOC_PROBE_MODE` | `full` | `full` — два прохода (документ + поля); `doc_only` / `fields_only` — только один источник (быстрее или для отладки) |
+| `DESKEW_DOC_FIELDS_MERGE_TOL` | `22` | Если угол по документу и по полям расходятся больше этого порога (градусы), берётся **только** угол по документу |
+| `DESKEW_FIELDS_FORCE_MIN_BOXES` | `2` | Минимум боксов полей, чтобы считать угол (прямой вызов детекторов не зависит от `doctype`) |
+| `DESKEW_DOC_FIELDS_ON_DISAGREE` | `doc` | При расхождении doc vs fields: `doc` или `fields` |
+| `DESKEW_RUS_SKIP_ANGLE90` | `1` | `1` (по умолчанию) — не вызывать Angle90 в пробе, чтобы угол совпадал с кадром после OpenCV-deskew; `0` — как в библиотеке (тогда к кадру применяются те же шаги 90°) |
+| `DESKEW_RUS_INVERT_ANGLE` | `0` | `1` — инвертировать знак угла (подбор при неверном направлении поворота) |
+| `DESKEW_FIELDS_MIN_ANGLE` / `DESKEW_FIELDS_MAX_ANGLE` | `0.4` / `50` | Игнорировать слишком малый или подозрительно большой итоговый угол |
+| `DESKEW_FIELDS_ROW_HULL_AGREE` | `14` | Согласованность двух эвристик по полям (строки vs оболочка боксов) |
+| `DESKEW_PRIMARY` | `projection` | Основной классический deskew; см. также `DESKEW_AGREE_TOL`, `DESKEW_ON_DISAGREE_USE` в коде |
+
+В ответе API поле `alignment` содержит детали (в т.ч. `picked`: `doc+fields_mean`, `doc_only_disagree`, `fields_only` и т.д.).
+
+**Важно:** стандартный `Pipeline()` RussianDocsOCR при типе документа `NONE` **не доходит** до DocDetector/TextFieldsDetector — поэтому проба угла реализована через прямые вызовы модулей (`probe_backend: direct_modules`), иначе на «сложных» фото сегментация полей не использовалась бы вообще.
+
+#### Автообрезка под документ (как ручная подрезка фона)
+
+Если документ на фото маленький, детекторам и OCR часто проще работать после **кадрирования**. Включите:
+
+| Переменная | По умолчанию | Смысл |
+|------------|----------------|--------|
+| `PREP_AUTO_DOC_CROP` | `0` | `1` — перед deskew/OCR обрезать кадр по контуру документа |
+| `PREP_CROP_METHOD` | `auto` | `auto` — сначала **DocDetector** (`russian_doc`), иначе контуры OpenCV (`contour`); можно задать `russian_doc` или `contour` явно |
+| `PREP_CROP_MARGIN_FRAC` | `0.035` | Запас по краям от размера кадра (доля ширины/высоты) |
+| `PREP_CROP_MIN_DOC_FRAC` | `0.08` | Мин. доля площади AABB документа на уменьшенном кадре (отсекаем ложные срабатывания) |
+| `PREP_CROP_MAX_DOC_FRAC` | `0.93` | Макс. доля — если «документ» почти на весь кадр, обрезка не делается |
+| `PREP_CROP_MAX_CROP_FRAC` | `0.985` | Если после полей обрезка почти на весь кадр — пропуск |
+
+В JSON смотрите `alignment.auto_crop`: `method` (`russian_doc` / `contour` / `none`), `roi_xyxy`, `cropped_shape` или `skipped_reason`.
+
+---
+
 ### Пример типичного ответа `/process`
 
 ```json
