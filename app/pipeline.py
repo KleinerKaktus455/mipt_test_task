@@ -450,6 +450,22 @@ def _extract_structured_fields(ocr_dict: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _recognized_fields_dict(ocr_dict: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """All OCR field ids → cleaned text (None if empty). Keys sorted for stable UI."""
+    if not isinstance(ocr_dict, dict):
+        return {}
+    out: Dict[str, Optional[str]] = {}
+    for key in sorted(ocr_dict.keys(), key=lambda x: str(x).lower()):
+        val = ocr_dict.get(key)
+        if isinstance(val, str):
+            out[str(key)] = _cleanup_whitespace(val)
+        elif val is None:
+            out[str(key)] = None
+        else:
+            out[str(key)] = _cleanup_whitespace(str(val))
+    return out
+
+
 def _angle_from_field_bboxes_hull(bboxes: Any) -> Tuple[Optional[float], Dict[str, Any]]:
     """
     Fallback: minAreaRect over all box corners. Often ~0 when detector returns axis-aligned
@@ -1076,9 +1092,9 @@ def process_document_image(image_bytes: bytes) -> Dict[str, Any]:
     original_bgr = _load_image_from_bytes(image_bytes)
     # Optional: zoom in on the document (like a manual crop) so it occupies more of the frame.
     if _truthy_env("PREP_AUTO_DOC_CROP", "0"):
-        work_bgr, prep_meta = _auto_crop_document_bgr(original_bgr)
+        work_bgr, _ = _auto_crop_document_bgr(original_bgr)
     else:
-        work_bgr, prep_meta = original_bgr, {"enabled": False}
+        work_bgr = original_bgr
 
     # Coarse 90° can confuse skew on diagonal real-world photos; enable if scans are often upside-down.
     use_coarse = os.getenv("DESKEW_COARSE_90", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -1086,13 +1102,11 @@ def process_document_image(image_bytes: bytes) -> Dict[str, Any]:
         coarse_bgr, coarse_angle = _coarse_rotate_90(work_bgr)
     else:
         coarse_bgr, coarse_angle = work_bgr, 0.0
-    aligned_bgr, fine_angle, align_debug = _deskew_image(coarse_bgr)
+    aligned_bgr, fine_angle, _ = _deskew_image(coarse_bgr)
     aligned_rgb = cv2.cvtColor(aligned_bgr, cv2.COLOR_BGR2RGB)
 
     fields_angle = 0.0
-    fields_align_meta: Dict[str, Any] = {}
     f_ang, f_meta = _probe_skew_from_russian_docs_fields(aligned_rgb)
-    fields_align_meta = f_meta
 
     # If the probe ran RussianDocs Angle90, doc/field geometry is in that rotated frame — mirror
     # the same 0/90/180/270 CCW steps on our canvas before applying the fine fields_angle.
@@ -1151,6 +1165,7 @@ def process_document_image(image_bytes: bytes) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "angle": float(total_angle),
         "structured_fields": structured,
+        "recognized_fields": _recognized_fields_dict(ocr_dict),
         "raw_lines": raw_lines,
         "detections": detections,
         "annotated_image_base64": annotated_b64,
@@ -1162,15 +1177,6 @@ def process_document_image(image_bytes: bytes) -> Dict[str, Any]:
         "fine_angle": float(fine_angle),
         "russian_probe_angle90": float(angle90_applied_deg),
         "fields_angle": float(fields_angle),
-        "fields_probe": fields_align_meta,
-        "auto_crop": prep_meta,
-        "coarse_enabled": use_coarse,
-        "annotated_canvas": (
-            "russian_docs_warped"
-            if results.img_with_fixed_perspective is not None or results.rotated_image is not None
-            else "aligned_input"
-        ),
-        **align_debug,
     }
     # Final annotated image may use RussianDocsOCR dewarp (different geometry than our deskew).
     if os.getenv("DESKEW_PREVIEW", "0").strip().lower() in {"1", "true", "yes", "on"}:

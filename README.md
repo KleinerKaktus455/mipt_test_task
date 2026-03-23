@@ -156,9 +156,9 @@ docker compose up
 | `DESKEW_FIELDS_ROW_HULL_AGREE` | `14` | Согласованность двух эвристик по полям (строки vs оболочка боксов) |
 | `DESKEW_PRIMARY` | `projection` | Основной классический deskew; см. также `DESKEW_AGREE_TOL`, `DESKEW_ON_DISAGREE_USE` в коде |
 
-В ответе API поле `alignment` содержит детали (в т.ч. `picked`: `doc+fields_mean`, `doc_only_disagree`, `fields_only` и т.д.).
+В ответе API поле `alignment` содержит только разложение **углов** (градусы): `coarse_angle`, `fine_angle`, `russian_probe_angle90`, `fields_angle`; суммарный поворот — в поле `angle`.
 
-**Важно:** стандартный `Pipeline()` RussianDocsOCR при типе документа `NONE` **не доходит** до DocDetector/TextFieldsDetector — поэтому проба угла реализована через прямые вызовы модулей (`probe_backend: direct_modules`), иначе на «сложных» фото сегментация полей не использовалась бы вообще.
+**Важно:** стандартный `Pipeline()` RussianDocsOCR при типе документа `NONE` **не доходит** до DocDetector/TextFieldsDetector — поэтому проба угла внутри пайплайна реализована через прямые вызовы модулей, иначе на «сложных» фото сегментация полей не использовалась бы вообще.
 
 #### Автообрезка под документ (как ручная подрезка фона)
 
@@ -172,8 +172,6 @@ docker compose up
 | `PREP_CROP_MIN_DOC_FRAC` | `0.08` | Мин. доля площади AABB документа на уменьшенном кадре (отсекаем ложные срабатывания) |
 | `PREP_CROP_MAX_DOC_FRAC` | `0.93` | Макс. доля — если «документ» почти на весь кадр, обрезка не делается |
 | `PREP_CROP_MAX_CROP_FRAC` | `0.985` | Если после полей обрезка почти на весь кадр — пропуск |
-
-В JSON смотрите `alignment.auto_crop`: `method` (`russian_doc` / `contour` / `none`), `roi_xyxy`, `cropped_shape` или `skipped_reason`.
 
 ---
 
