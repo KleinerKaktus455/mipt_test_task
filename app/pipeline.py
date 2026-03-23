@@ -9,6 +9,7 @@ import numpy as np
 
 try:
     from russian_docs_ocr.document_processing import Pipeline as RussianDocsPipeline
+    from russian_docs_ocr.document_processing.pipeline.pipeline import PipelineResults
 except ImportError as e:  # pragma: no cover
     raise RuntimeError(
         "russian-docs-ocr is required. Make sure it is installed via requirements.txt."
@@ -26,6 +27,109 @@ def _get_pipeline() -> RussianDocsPipeline:
         device = os.getenv("RUS_DOCS_DEVICE", "cpu")
         _RUSSIAN_DOCS_PIPELINE = RussianDocsPipeline(model_format=model_format, device=device)
     return _RUSSIAN_DOCS_PIPELINE
+
+
+def _is_doctype_none_like(raw: Any) -> bool:
+    if raw is None:
+        return True
+    if not isinstance(raw, str):
+        return False
+    s = raw.strip().upper()
+    return s in {"", "NONE", "NULL", "UNKNOWN"} or s.startswith("NONE")
+
+
+def _normalize_fallback_doctype(effective: str) -> str:
+    """
+    RussianDocsOCR expects ``type_year`` and splits on the last underscore
+    (e.g. dl_2011 → short key ``dl`` for OCROptions).
+    """
+    effective = (effective or "").strip()
+    if not effective:
+        return "dl_2011"
+    if "_" not in effective:
+        return f"{effective}_2011"
+    return effective
+
+
+def _run_russian_docs_pipeline_allow_none(
+    pipeline: RussianDocsPipeline,
+    img_path: Any,
+    *,
+    ocr: bool = True,
+    get_doc_borders: bool = True,
+    find_text_fields: bool = True,
+    check_quality: bool = False,
+    low_quality: bool = True,
+    docconf: float = 0.5,
+    img_size: int = 1500,
+) -> Tuple[Any, Dict[str, Any]]:
+    """
+    Mirrors ``Pipeline.__call__`` but does **not** return early when DocType is NONE:
+    uses ``RUS_DOCS_NONE_FALLBACK_DOCTYPE`` (default ``dl_2011``) only for OCR / split options.
+    Classifier value in ``meta_results['DocType']`` is left unchanged (usually NONE).
+    """
+    meta_out: Dict[str, Any] = {
+        "document_type_fallback": None,
+        "document_type_classifier": None,
+    }
+
+    pipeline.results = PipelineResults()
+    img = pipeline._prepare_image(img_path, img_size=img_size)
+
+    pipeline._model_call(pipeline._angle, img)
+    img = pipeline.results.rotated_image
+
+    pipeline._model_call(pipeline._doctype, img)
+    raw_doctype = pipeline.results.doctype
+    meta_out["document_type_classifier"] = raw_doctype
+
+    if _is_doctype_none_like(raw_doctype):
+        if not _truthy_env("RUS_DOCS_NONE_OCR_FALLBACK", "1"):
+            return pipeline.results, meta_out
+        effective = _normalize_fallback_doctype(os.getenv("RUS_DOCS_NONE_FALLBACK_DOCTYPE", "dl_2011"))
+        doc_type_full = effective
+        meta_out["document_type_fallback"] = effective
+    else:
+        doc_type_full = str(raw_doctype)
+
+    doc_type_short, _year = doc_type_full.rsplit("_", maxsplit=1)
+    pipeline.ocr_options = pipeline.ocr_options.make_options(doc_type_short)
+
+    if check_quality:
+        pipeline._model_call(pipeline._glare, img)
+        pipeline._model_call(pipeline._blur, img)
+        pipeline._model_call(pipeline._print_spoofing, img)
+        pipeline._model_call(pipeline._lcd_spoofing, img)
+
+    if not low_quality:
+        quality = pipeline.results.quality
+        if (
+            quality.get("Glare", False) == "bad"
+            or quality.get("Blur", False) == "bad"
+            or quality.get("DocConf", 0) > docconf
+        ):
+            return pipeline.results, meta_out
+
+    if get_doc_borders:
+        pipeline._model_call(pipeline._doc_detector, img)
+        img = pipeline.results.img_with_fixed_perspective
+
+    if not find_text_fields:
+        return pipeline.results, meta_out
+
+    rotate_licence = pipeline.ocr_options.needs_licence_rotation
+    pipeline._model_call(pipeline._fields_detector, img, rotate_licence=rotate_licence)
+    text_fields = pipeline.results.text_fields_meta
+
+    words_splitted = None
+    if text_fields:
+        pipeline._model_call(pipeline._split_words, text_fields.copy(), doc_type_short)
+        words_splitted = pipeline.results.words_patches
+
+    if ocr and words_splitted:
+        pipeline._model_call(pipeline._ocr, words_splitted, doc_type_short)
+
+    return pipeline.results, meta_out
 
 
 def _load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
@@ -1137,8 +1241,9 @@ def process_document_image(image_bytes: bytes) -> Dict[str, Any]:
     img_size = int(os.getenv("RUS_DOCS_IMG_SIZE", "1500"))
 
     with _PIPELINE_LOCK:
-        results = pipeline(
-            img_path=aligned_rgb,
+        results, rus_none_meta = _run_russian_docs_pipeline_allow_none(
+            pipeline,
+            aligned_rgb,
             ocr=True,
             get_doc_borders=True,
             find_text_fields=True,
@@ -1172,6 +1277,9 @@ def process_document_image(image_bytes: bytes) -> Dict[str, Any]:
         "document_type": results.doctype,
         "quality": results.quality,
     }
+    fb = rus_none_meta.get("document_type_fallback")
+    if fb:
+        out["document_type_fallback"] = fb
     out["alignment"] = {
         "coarse_angle": float(coarse_angle),
         "fine_angle": float(fine_angle),

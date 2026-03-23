@@ -69,6 +69,13 @@ def main() -> None:
             st.warning("Не удалось получить аннотированное изображение.")
 
     with col_fields:
+        dt = result.get("document_type")
+        st.caption(f"Тип документа (классификатор): **{dt or '—'}**")
+        if result.get("document_type_fallback"):
+            st.caption(
+                f"OCR по шаблону **{result['document_type_fallback']}** — классификатор не уверен в типе."
+            )
+
         st.subheader("Распознанные поля")
         recognized = result.get("recognized_fields")
         if isinstance(recognized, dict) and recognized:
