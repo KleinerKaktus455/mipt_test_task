@@ -1,0 +1,8 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+opencv-python-headless==4.10.0.84
+python-multipart==0.0.9
+Pillow==10.1.0
+fastui==0.7.0
+streamlit==1.40.2
+russian-docs-ocr @ git+https://github.com/protei300/RussianDocsOCR.git

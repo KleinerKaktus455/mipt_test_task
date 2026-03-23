@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: doc-ocr-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Переменная для настройки base_url внешних API, если они будут использованы
+      # (требование задания о возможности настройки прокси / base_url).
+      LLM_BASE_URL: "${LLM_BASE_URL:-}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    # Для старых драйверов / docker setups может понадобиться:
+    # runtime: nvidia
+
