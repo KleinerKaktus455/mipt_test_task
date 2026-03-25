@@ -40,14 +40,30 @@ def _field_label(field_id: str) -> str:
 
 def main() -> None:
     st.set_page_config(page_title="Документ OCR", layout="wide")
-    st.title("Обработка документов (выравнивание + OCR)")
+
+    if "upload_reset_id" not in st.session_state:
+        st.session_state.upload_reset_id = 0
+
+    title_col, reset_col = st.columns([4, 1])
+    with title_col:
+        st.title("Обработка документов (выравнивание + OCR)")
+    with reset_col:
+        st.write("")
+        if st.button("Сброс", use_container_width=True, help="Сбросить загрузку и начать заново"):
+            st.session_state.upload_reset_id += 1
+            st.rerun()
+
     st.write(
         "Загрузите изображение банковской карты, ID-карты или "
         "водительского удостоверения. Система выровняет изображение, "
         "распознает текст и попытается извлечь ФИО, дату рождения и номер документа."
     )
 
-    uploaded = st.file_uploader("Изображение документа", type=["png", "jpg", "jpeg"])
+    uploaded = st.file_uploader(
+        "Изображение документа",
+        type=["png", "jpg", "jpeg"],
+        key=f"doc_upload_{st.session_state.upload_reset_id}",
+    )
 
     if uploaded is None:
         return
@@ -60,7 +76,10 @@ def main() -> None:
     col_img, col_fields = st.columns([2, 1])
 
     with col_img:
-        st.subheader("Выровненное изображение с разметкой")
+        st.subheader("Исходное фото (до обрезки, выравнивания и OCR)")
+        st.image(io.BytesIO(bytes_data), use_container_width=True)
+
+        st.subheader("После обработки (разметка полей)")
         img_b64 = result.get("annotated_image_base64")
         if img_b64:
             img_bytes = base64.b64decode(img_b64)

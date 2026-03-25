@@ -1,21 +1,46 @@
 version: "3.9"
 
 services:
-  app:
+  api:
     build: .
-    container_name: doc-ocr-app
+    container_name: doc-ocr-api
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      # Переменная для настройки base_url внешних API, если они будут использованы
-      # (требование задания о возможности настройки прокси / base_url).
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: ["gpu"]
-    # Для старых драйверов / docker setups может понадобиться:
-    # runtime: nvidia
+      USE_RUSSIAN_DOCS_OCR: "1"
+      RUS_DOCS_MODEL_FORMAT: "ONNX"
+      DESKEW_PRIMARY: "projection"
+      DESKEW_COARSE_90: "0"
+      PREP_AUTO_DOC_CROP: "1"
+      PREP_CROP_METHOD: "auto"
+      PYTHONUNBUFFERED: "1"
+      # Для CPU оставьте значение "cpu".
+      # Для GPU (Linux/WSL + NVIDIA Container Toolkit) поставьте "gpu".
+      RUS_DOCS_DEVICE: "${RUS_DOCS_DEVICE:-cpu}"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # Для Linux/Windows (не macOS): при наличии NVIDIA GPU можно включить:
+    # gpus: all
+
+  streamlit:
+    build: .
+    container_name: doc-ocr-streamlit
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      USE_RUSSIAN_DOCS_OCR: "1"
+      RUS_DOCS_MODEL_FORMAT: "ONNX"
+      DESKEW_PRIMARY: "projection"
+      DESKEW_COARSE_90: "0"
+      PREP_AUTO_DOC_CROP: "1"
+      PREP_CROP_METHOD: "auto"
+      PYTHONUNBUFFERED: "1"
+      RUS_DOCS_DEVICE: "${RUS_DOCS_DEVICE:-cpu}"
+    command: streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    depends_on:
+      - api
+    # Для Linux/Windows (не macOS): при наличии NVIDIA GPU можно включить:
+    # gpus: all
 
