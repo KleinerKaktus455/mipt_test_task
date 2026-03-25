@@ -1,3 +1,208 @@
+## Document OCR Service (FastAPI + Streamlit + RussianDocsOCR)
+
+Сервис для обработки фото документов РФ:
+
+- автообрезка документа в кадре (опционально),
+- выравнивание (deskew),
+- OCR через `RussianDocsOCR`,
+- возврат структурированных полей и аннотированного изображения.
+
+Проект теперь состоит из двух приложений:
+
+- `api` (FastAPI) на `http://localhost:8000`,
+- `streamlit` UI на `http://localhost:8501`.
+
+---
+
+### Текущая архитектура
+
+- **`app/main.py`** - REST API:
+  - `POST /process` - обработка изображения документа.
+  - `GET /health` - health-check.
+- **`app/pipeline.py`** - основной пайплайн:
+  - предобработка и deskew,
+  - интеграция с `RussianDocsOCR`,
+  - fallback при `doctype=NONE`,
+  - формирование JSON-ответа.
+- **`app/streamlit_app.py`** - UI для ручной проверки результата OCR.
+- **`docker-compose.yml`** - конфигурация для Linux/Windows (не macOS).
+- **`docker-compose.macos.yml`** - конфигурация для macOS (CPU, `platform: linux/amd64`).
+
+---
+
+### Поддерживаемые документы (RussianDocsOCR)
+
+По официальному README библиотеки `RussianDocsOCR`:
+
+1. Внутренний паспорт РФ (версия 1997 года)
+2. Внутренний паспорт РФ (версия 2011 года)
+3. Заграничный паспорт РФ (версия 2003 года)
+4. Заграничный паспорт РФ (биометрический, версия 2007 года)
+5. Водительские права РФ (версия 2011 года)
+6. Водительские права РФ (версия 2020 года)
+7. СНИЛС (версия 1996 года)
+
+---
+
+### Как работает обработка
+
+Пайплайн в `app/pipeline.py`:
+
+1. Декодирование изображения из байтов.
+2. Опциональная автообрезка по документу:
+   - сначала через `RussianDocsOCR DocDetector`,
+   - fallback на контуры OpenCV.
+3. Выравнивание:
+   - coarse-поворот на 90 град. (опционально),
+   - fine deskew (projection/contour/hough/text),
+   - дополнительная оценка угла через модули `RussianDocsOCR`.
+4. OCR:
+   - запуск `RussianDocsOCR Pipeline`,
+   - если классификатор вернул `NONE`, возможно продолжение OCR с fallback doctype.
+5. Формирование ответа:
+   - `structured_fields`,
+   - `recognized_fields`,
+   - `raw_lines`, `detections`,
+   - `annotated_image_base64`,
+   - `alignment` (разложение итогового угла).
+
+---
+
+### API
+
+#### `POST /process`
+
+Принимает `multipart/form-data` с полем `file` (изображение).
+
+Возвращает JSON с ключами:
+
+- `angle` - итоговый примененный угол поворота.
+- `alignment` - вклад каждого этапа:
+  - `coarse_angle`,
+  - `fine_angle`,
+  - `russian_probe_angle90`,
+  - `fields_angle`.
+- `structured_fields`:
+  - `full_name`,
+  - `date_of_birth`,
+  - `document_number`.
+- `recognized_fields` - все OCR-поля словарем `field_id -> value`.
+- `raw_lines` - текстовые строки OCR.
+- `detections` - список боксов и confidence.
+- `annotated_image_base64` - PNG в base64.
+- `document_type` - тип документа от классификатора.
+- `document_type_fallback` - присутствует, если сработал fallback.
+- `quality` - данные по качеству из `RussianDocsOCR`.
+
+#### `GET /health`
+
+Простой health-check:
+
+```json
+{"status": "ok"}
+```
+
+---
+
+### Локальный запуск (без Docker)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Проверка:
+
+- API docs: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
+
+Для UI (отдельным процессом):
+
+```bash
+streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+---
+
+### Docker: Linux/Windows (не macOS)
+
+Используйте `docker-compose.yml`:
+
+```bash
+docker compose build
+docker compose up
+```
+
+Сервисы:
+
+- API: `http://localhost:8000`
+- Streamlit: `http://localhost:8501`
+
+По умолчанию режим CPU: `RUS_DOCS_DEVICE=cpu`.
+
+Для GPU (при установленном NVIDIA Container Toolkit) включите `gpus: all` в обоих сервисах и задайте:
+
+```bash
+RUS_DOCS_DEVICE=gpu docker compose up
+```
+
+---
+
+### Docker: macOS
+
+Используйте отдельный файл `docker-compose.macos.yml`:
+
+```bash
+docker compose -f docker-compose.macos.yml build
+docker compose -f docker-compose.macos.yml up
+```
+
+Особенности:
+
+- принудительно `platform: linux/amd64`,
+- CPU-only режим для `RussianDocsOCR`.
+
+---
+
+### Ключевые переменные окружения
+
+Общие:
+
+- `RUS_DOCS_DEVICE` - `cpu` или `gpu`.
+- `RUS_DOCS_MODEL_FORMAT` - формат моделей (`ONNX` по умолчанию).
+- `RUS_DOCS_IMG_SIZE` - размер длинной стороны для инференса (по умолчанию `1500`).
+- `LLM_BASE_URL` - зарезервировано для возможной внешней LLM-интеграции.
+
+Fallback для `doctype=NONE`:
+
+- `RUS_DOCS_NONE_OCR_FALLBACK` - `1/0`, продолжать ли OCR при `NONE`.
+- `RUS_DOCS_NONE_FALLBACK_DOCTYPE` - шаблон doctype для fallback (по умолчанию `dl_2011`).
+
+Автообрезка:
+
+- `PREP_AUTO_DOC_CROP` - включить автообрезку (`1/0`).
+- `PREP_CROP_METHOD` - `auto`, `russian_doc`, `contour`.
+- `PREP_CROP_MARGIN_FRAC`, `PREP_CROP_MIN_DOC_FRAC`, `PREP_CROP_MAX_DOC_FRAC`.
+
+Deskew:
+
+- `DESKEW_PRIMARY` - базовый метод (`projection` по умолчанию).
+- `DESKEW_COARSE_90` - грубый поворот 0/90/180/270.
+- `DESKEW_USE_RUS_DOCS_FIELDS` - использовать probe угла через модули RussianDocsOCR.
+
+---
+
+### Стек
+
+- Python 3.11
+- FastAPI + Uvicorn
+- Streamlit
+- OpenCV
+- RussianDocsOCR
+- Docker / Docker Compose
+
 ## Document Preprocessing & OCR – ML Engineer Test
 
 **Цель**: система для первичной обработки персональных документов (банковские карты, ID карты, водительские удостоверения):
@@ -141,9 +346,7 @@ docker compose up
 
 Пайплайн (`app/pipeline.py`) может оценивать наклон **до** полного OCR: OpenCV (projection/contour) + геометрия **RussianDocsOCR** (сегментация документа и боксы полей).
 
-#### Поддерживаемые документы (RussianDocsOCR)
-
-Согласно официальному README библиотеки `RussianDocsOCR`, поддерживаются:
+#### Поддерживаемые документы 
 
 1. Внутренний паспорт РФ (версия 1997 года)
 2. Внутренний паспорт РФ (версия 2011 года)
